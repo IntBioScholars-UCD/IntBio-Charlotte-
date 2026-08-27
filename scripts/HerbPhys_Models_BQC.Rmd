@@ -1,0 +1,161 @@
+---
+title: "HerbPhys_Models_Charlotte"
+author: "Brandie QC"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Trying phys ~ herb models for Charlotte
+
+## Libraries
+```{r}
+library(tidyverse)
+library(rstatix) #for anova_test function
+# Color blind friendly palette with grey:
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+sem <- function(x, na.rm=FALSE) {  #for calculating standard error
+  sd(x,na.rm=na.rm)/sqrt(length(na.omit(x)))
+} 
+```
+
+## Load Data
+```{r}
+phys_data <- read_csv("../input/merged_licor_data.csv") %>% 
+  rename(survey.date = date) %>%
+  mutate(survey.date = ymd(survey.date))
+
+herbivory07232025 = read_csv("../input/WL2_size_survey_20250718_corrected.csv") %>%
+  rename(survey.date = 'survey date')
+#because we selected the closest size survey to 7/23/25, we want to update the entry in survey.date to match the phys date
+herbivory07232025$survey.date <- "7/23/25"
+herbivory08072025 = read_csv("../input/WL2_size_survey_20250807_corrected.csv")%>% 
+  select(-leaf.number) %>%
+  rename(survey.date = 'survey date')
+herbivory08282025 = read_csv("../input/WL2_size_survey_20250828_blocksA-G_corrected.csv")
+herbivory09042025 = read_csv("../input/WL2_size_survey_20250904_blocksH-N_corrected.csv") %>%
+  mutate(overhd.diam = ifelse(overhd.diam == "-", NA, overhd.diam)) %>%
+  mutate(overhd.diam = as.numeric(overhd.diam))
+herbivory09242025 = read_csv("../input/WL2_size_survey_20250924_blocksA-F_corrected.csv")
+```
+
+## Merge data
+```{r}
+all_size = bind_rows(herbivory07232025, herbivory08072025, herbivory08282025, herbivory09042025, herbivory09242025) %>%
+  rename(unique_id = Unique.ID) %>%
+  select(unique_id, herbv.scale, survey.date) %>%
+  mutate(survey.date = mdy(survey.date))
+
+herb.gsw = left_join(phys_data, all_size, by = c("unique_id", "survey.date")) %>%
+  mutate(herbv.scale = as.character(herbv.scale))
+
+#filter to parents only
+herb.gsw_parents <- herb.gsw %>% 
+  #filter to parents only:
+  filter(genotype %in% c("SQ3", "CC", "WL1", "BH", "wv", "YO11", "TM2", "WL2", "DPR", "LV1")) %>% 
+  select(genotype, survey.date, herbv.scale, gsw) %>% #only keep the columns you need
+  filter(!is.na(gsw), !is.na(herbv.scale)) #remove missing data for gsw and herbivory 
+```
+
+## Sample Sizes  
+```{r}
+herb.gsw_parents %>% 
+  group_by(genotype) %>% 
+  summarise(n=n()) %>% #calculate sample sizes for the each genotype 
+  arrange(n)
+#SQ3, WL1, WL2, and TM2 have the highest sample sizes
+
+#check by date
+herb.gsw_parents %>% 
+  group_by(genotype, survey.date) %>% 
+  summarise(n=n()) #calculate sample sizes for the each genotype 
+
+#only keep SQ3, WL1, WL2, and TM2 in the data for analysis 
+herb.gsw_parents_foranalysis <- herb.gsw_parents %>% 
+  filter(!genotype %in% c("CC", "DPR", "YO11", "BH")) %>% #remove these pops with too low sample size 
+  filter(gsw>0) %>%  #remove negative gsw values
+  group_by(genotype, herbv.scale) %>%
+  filter(n()>1) %>% #only keep herbivory scales that have multiple observations per genotype 
+  ungroup() %>% 
+  mutate(log.gsw = log(gsw), log10.gsw=log10(gsw), sqrt.gsw=sqrt(gsw)) #some data transformations
+```
+
+## Figures
+```{r}
+herb.gsw_parents_foranalysis %>% 
+  ggplot(aes(x=herbv.scale, y=gsw)) + 
+  geom_point() #scatter plot 
+
+herb.gsw_parents_foranalysis %>% 
+  ggplot(aes(x = genotype, y = gsw, fill = herbv.scale)) + 
+  geom_boxplot() + #box plot 
+  geom_jitter(width = 0.1)
+
+# means and standard errors across all dates 
+herb.gsw_parents_foranalysis %>% 
+  group_by(genotype, herbv.scale) %>% 
+  summarise(mean.gsw=mean(gsw), sem.gsw=sem(gsw)) %>% 
+  ggplot(aes(x=genotype, y=mean.gsw, group=herbv.scale, fill = herbv.scale)) +
+  geom_col(width = 0.7,position = position_dodge(0.75)) +
+  geom_errorbar(aes(ymin=mean.gsw-sem.gsw,
+                    ymax=mean.gsw+sem.gsw),
+                width=.2, #width of the error bars 
+                position =position_dodge(0.75)) + #match the spacing of the geom_cols
+  scale_fill_manual(values=cbPalette) + #make the colors color blind friendly 
+  theme(text=element_text(size=20)) + #increase size of text 
+  labs(x="Genotype", y="Avg GSW", fill="Herbivory \n Scale") #edit axes labels 
+ggsave("../output/GSW.Herb.Genotype_Fig.png", width = 8, height = 6, units = "in")
+
+# means and standard errors by date 
+herb.gsw_parents_foranalysis %>% 
+  group_by(genotype, herbv.scale, survey.date) %>% 
+  summarise(mean.gsw=mean(gsw), sem.gsw=sem(gsw)) %>% 
+  ggplot(aes(x=genotype, y=mean.gsw, group=herbv.scale, fill = herbv.scale)) +
+  geom_col(width = 0.7,position = position_dodge(0.75)) +
+  geom_errorbar(aes(ymin=mean.gsw-sem.gsw,
+                    ymax=mean.gsw+sem.gsw),
+                width=.2, #width of the error bars 
+                position =position_dodge(0.75)) + #match the spacing of the geom_cols
+  facet_wrap(~survey.date) +
+  scale_fill_manual(values=cbPalette)
+```
+
+## Check for normality 
+```{r}
+herb.gsw_parents_foranalysis %>% 
+  ggplot(aes(gsw)) +
+  geom_histogram() #data is right skewed 
+
+herb.gsw_parents_foranalysis %>% 
+  ggplot(aes(log.gsw)) +
+  geom_histogram()
+
+herb.gsw_parents_foranalysis %>% 
+  ggplot(aes(log10.gsw)) +
+  geom_histogram()
+
+herb.gsw_parents_foranalysis %>% 
+  ggplot(aes(sqrt.gsw)) +
+  geom_histogram() #not perfectly normal, but better than the others 
+```
+
+
+## Stats
+```{r}
+herb.gsw_m1 <- lm(sqrt.gsw ~ herbv.scale, data=herb.gsw_parents_foranalysis) #just test for a relationship between gsw and herb scale
+summary(herb.gsw_m1)
+anova(herb.gsw_m1) #no signifcant relationship with between herbivory and gsw 
+
+# herb vs gsw parents ANOVA by count - this model is from gsw.herb.R 
+herb.gsw_parents_foranalysis %>%
+  group_by(genotype) %>%
+  anova_test(sqrt.gsw ~ herbv.scale)
+
+herb.gsw_m2 <- lm(sqrt.gsw ~ herbv.scale*genotype, data=herb.gsw_parents_foranalysis)
+summary(herb.gsw_m2) #no significant results 
+```
+
